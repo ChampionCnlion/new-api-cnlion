@@ -79,6 +79,7 @@ const LoginForm = () => {
     username: '',
     password: '',
     wechat_verification_code: '',
+    invite_code: '',
   });
   const { username, password } = inputs;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -177,11 +178,23 @@ const LoginForm = () => {
     }
   }, []);
 
+  useEffect(() => {
+    const cachedInviteCode = localStorage.getItem('invite_code') || '';
+    if (cachedInviteCode) {
+      setInputs((prev) =>
+        prev.invite_code === cachedInviteCode
+          ? prev
+          : { ...prev, invite_code: cachedInviteCode },
+      );
+    }
+  }, []);
+
   const onWeChatLoginClicked = () => {
     if ((hasUserAgreement || hasPrivacyPolicy) && !agreedToTerms) {
       showInfo(t('请先阅读并同意用户协议和隐私政策'));
       return;
     }
+    persistInviteCodeForOAuth();
     setWechatLoading(true);
     setShowWeChatLoginModal(true);
     setWechatLoading(false);
@@ -194,8 +207,9 @@ const LoginForm = () => {
     }
     setWechatCodeSubmitLoading(true);
     try {
+      const inviteCode = localStorage.getItem('invite_code') || '';
       const res = await API.get(
-        `/api/oauth/wechat?code=${inputs.wechat_verification_code}`,
+        `/api/oauth/wechat?code=${inputs.wechat_verification_code}&invite_code=${encodeURIComponent(inviteCode)}`,
       );
       const { success, message, data } = res.data;
       if (success) {
@@ -217,7 +231,25 @@ const LoginForm = () => {
   };
 
   function handleChange(name, value) {
+    if (name === 'invite_code') {
+      const nextValue = value.trim();
+      if (nextValue) {
+        localStorage.setItem('invite_code', nextValue);
+      } else {
+        localStorage.removeItem('invite_code');
+      }
+      setInputs((inputs) => ({ ...inputs, [name]: nextValue }));
+      return;
+    }
     setInputs((inputs) => ({ ...inputs, [name]: value }));
+  }
+
+  function persistInviteCodeForOAuth() {
+    const inviteCode =
+      inputs.invite_code?.trim() || localStorage.getItem('invite_code') || '';
+    if (inviteCode) {
+      localStorage.setItem('invite_code', inviteCode);
+    }
   }
 
   async function handleSubmit(e) {
@@ -323,6 +355,7 @@ const LoginForm = () => {
     if (githubButtonDisabled) {
       return;
     }
+    persistInviteCodeForOAuth();
     setGithubLoading(true);
     setGithubButtonDisabled(true);
     setGithubButtonState('redirecting');
@@ -348,6 +381,7 @@ const LoginForm = () => {
       showInfo(t('请先阅读并同意用户协议和隐私政策'));
       return;
     }
+    persistInviteCodeForOAuth();
     setDiscordLoading(true);
     try {
       onDiscordOAuthClicked(status.discord_client_id, { shouldLogout: true });
@@ -363,6 +397,7 @@ const LoginForm = () => {
       showInfo(t('请先阅读并同意用户协议和隐私政策'));
       return;
     }
+    persistInviteCodeForOAuth();
     setOidcLoading(true);
     try {
       onOIDCClicked(
@@ -383,6 +418,7 @@ const LoginForm = () => {
       showInfo(t('请先阅读并同意用户协议和隐私政策'));
       return;
     }
+    persistInviteCodeForOAuth();
     setLinuxdoLoading(true);
     try {
       onLinuxDOOAuthClicked(status.linuxdo_client_id, { shouldLogout: true });
@@ -398,6 +434,7 @@ const LoginForm = () => {
       showInfo(t('请先阅读并同意用户协议和隐私政策'));
       return;
     }
+    persistInviteCodeForOAuth();
     setCustomOAuthLoading((prev) => ({ ...prev, [provider.slug]: true }));
     try {
       onCustomOAuthClicked(provider, { shouldLogout: true });
@@ -502,7 +539,12 @@ const LoginForm = () => {
   // 返回登录页面
   const handleBackToLogin = () => {
     setShowTwoFA(false);
-    setInputs({ username: '', password: '', wechat_verification_code: '' });
+    setInputs({
+      username: '',
+      password: '',
+      wechat_verification_code: '',
+      invite_code: localStorage.getItem('invite_code') || '',
+    });
   };
 
   const renderOAuthOptions = () => {
@@ -524,6 +566,23 @@ const LoginForm = () => {
             </div>
             <div className='px-2 py-8'>
               <div className='space-y-3'>
+                {status?.invite_code_register_enabled && (
+                  <div className='mb-4'>
+                    <Form.Input
+                      field='invite_code'
+                      label={t('邀请码')}
+                      placeholder={t('首次第三方注册时填写邀请码，已有账号可留空')}
+                      name='invite_code'
+                      value={inputs.invite_code}
+                      onChange={(value) => handleChange('invite_code', value)}
+                      prefix={<IconKey />}
+                    />
+                    <Text size='small' className='text-gray-500'>
+                      {t('首次第三方注册时填写邀请码，已有账号可留空')}
+                    </Text>
+                  </div>
+                )}
+
                 {status.wechat_login && (
                   <Button
                     theme='outline'
