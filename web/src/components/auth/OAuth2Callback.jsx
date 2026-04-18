@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import {
   API,
   showError,
+  showInfo,
   showSuccess,
   updateAPI,
   setUserData,
@@ -60,6 +61,13 @@ const OAuth2Callback = (props) => {
         localStorage.removeItem('invite_code');
         showSuccess(t('绑定成功！'));
         navigate('/console/personal');
+      } else if (data?.action === 'require_invite') {
+        showInfo(t('请先填写邀请码完成注册'));
+        navigate(
+          `/oauth/invite?provider=${encodeURIComponent(
+            data.provider || props.type,
+          )}`,
+        );
       } else {
         userDispatch({ type: 'login', payload: data });
         localStorage.setItem('user', JSON.stringify(data));

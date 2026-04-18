@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
@@ -14,6 +15,39 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+const pendingOAuthRegistrationSessionKey = "pending_oauth_registration"
+
+type pendingOAuthRegistration struct {
+	Provider       string `json:"provider"`
+	ProviderUserID string `json:"provider_user_id"`
+	Username       string `json:"username,omitempty"`
+	DisplayName    string `json:"display_name,omitempty"`
+	Email          string `json:"email,omitempty"`
+}
+
+func newPendingOAuthRegistration(providerName string, oauthUser *oauth.OAuthUser) *pendingOAuthRegistration {
+	return &pendingOAuthRegistration{
+		Provider:       providerName,
+		ProviderUserID: oauthUser.ProviderUserID,
+		Username:       oauthUser.Username,
+		DisplayName:    oauthUser.DisplayName,
+		Email:          oauthUser.Email,
+	}
+}
+
+func (p *pendingOAuthRegistration) ToOAuthUser() *oauth.OAuthUser {
+	return &oauth.OAuthUser{
+		ProviderUserID: p.ProviderUserID,
+		Username:       p.Username,
+		DisplayName:    p.DisplayName,
+		Email:          p.Email,
+	}
+}
+
+type completeOAuthRegistrationRequest struct {
+	InviteCode string `json:"invite_code"`
+}
 
 // providerParams returns map with Provider key for i18n templates
 func providerParams(name string) map[string]any {
@@ -36,6 +70,7 @@ func GenerateOAuthCode(c *gin.Context) {
 	} else {
 		session.Delete("invite_code")
 	}
+	session.Delete(pendingOAuthRegistrationSessionKey)
 	session.Set("oauth_state", state)
 	err := session.Save()
 	if err != nil {
@@ -113,9 +148,15 @@ func HandleOAuth(c *gin.Context) {
 	}
 
 	// 7. Find or create user
-	user, err := findOrCreateOAuthUser(c, provider, oauthUser, session)
+	user, err := findOrCreateOAuthUser(providerName, provider, oauthUser, session)
 	if err != nil {
-		switch err.(type) {
+		switch e := err.(type) {
+		case *OAuthInviteCodeRequiredError:
+			common.ApiSuccess(c, gin.H{
+				"action":   "require_invite",
+				"provider": e.Provider,
+			})
+			return
 		case *OAuthUserDeletedError:
 			common.ApiErrorI18n(c, i18n.MsgOAuthUserDeleted)
 		case *OAuthRegistrationDisabledError:
@@ -133,6 +174,77 @@ func HandleOAuth(c *gin.Context) {
 	}
 
 	// 9. Setup login
+	clearOAuthRegistrationSession(session)
+	setupLogin(user, c)
+}
+
+// CompleteOAuthRegistration completes first-time OAuth registration after invite code verification.
+func CompleteOAuthRegistration(c *gin.Context) {
+	providerName := c.Param("provider")
+	provider := oauth.GetProvider(providerName)
+	if provider == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": i18n.T(c, i18n.MsgOAuthUnknownProvider),
+		})
+		return
+	}
+	if !provider.IsEnabled() {
+		common.ApiErrorI18n(c, i18n.MsgOAuthNotEnabled, providerParams(provider.GetName()))
+		return
+	}
+
+	session := sessions.Default(c)
+	pending, err := loadPendingOAuthRegistration(session)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if pending == nil {
+		common.ApiErrorMsg(c, "未找到待完成的第三方注册，请重新发起登录")
+		return
+	}
+	if pending.Provider != providerName {
+		common.ApiErrorMsg(c, "当前待完成注册的第三方来源不匹配，请重新发起登录")
+		return
+	}
+
+	request := completeOAuthRegistrationRequest{}
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+
+	oauthUser := pending.ToOAuthUser()
+	user, err := findExistingOAuthUser(provider, oauthUser)
+	if err != nil {
+		switch err.(type) {
+		case *OAuthUserDeletedError:
+			common.ApiErrorI18n(c, i18n.MsgOAuthUserDeleted)
+		default:
+			common.ApiError(c, err)
+		}
+		return
+	}
+
+	if user == nil {
+		if !common.RegisterEnabled {
+			common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
+			return
+		}
+		user, err = createOAuthUser(provider, oauthUser, getInviterIdFromSession(session), request.InviteCode)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+
+	if user.Status != common.UserStatusEnabled {
+		common.ApiErrorI18n(c, i18n.MsgOAuthUserBanned)
+		return
+	}
+
+	clearOAuthRegistrationSession(session)
 	setupLogin(user, c)
 }
 
@@ -199,13 +311,42 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 		}
 	}
 
+	clearOAuthRegistrationSession(session)
+	err = session.Save()
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
+		return
+	}
+
 	common.ApiSuccessI18n(c, i18n.MsgOAuthBindSuccess, gin.H{
 		"action": "bind",
 	})
 }
 
 // findOrCreateOAuthUser finds existing user or creates new user
-func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, session sessions.Session) (*model.User, error) {
+func findOrCreateOAuthUser(providerName string, provider oauth.Provider, oauthUser *oauth.OAuthUser, session sessions.Session) (*model.User, error) {
+	user, err := findExistingOAuthUser(provider, oauthUser)
+	if err != nil || user != nil {
+		return user, err
+	}
+
+	// User doesn't exist, create new user if registration is enabled
+	if !common.RegisterEnabled {
+		return nil, &OAuthRegistrationDisabledError{}
+	}
+
+	inviteCode := getInviteCodeFromSession(session)
+	if common.InviteCodeRegisterEnabled && inviteCode == "" {
+		if err := savePendingOAuthRegistration(session, providerName, oauthUser); err != nil {
+			return nil, err
+		}
+		return nil, &OAuthInviteCodeRequiredError{Provider: providerName}
+	}
+
+	return createOAuthUser(provider, oauthUser, getInviterIdFromSession(session), inviteCode)
+}
+
+func findExistingOAuthUser(provider oauth.Provider, oauthUser *oauth.OAuthUser) (*model.User, error) {
 	user := &model.User{}
 
 	// Check if user already exists with new ID
@@ -241,11 +382,16 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		}
 	}
 
-	// User doesn't exist, create new user if registration is enabled
-	if !common.RegisterEnabled {
-		return nil, &OAuthRegistrationDisabledError{}
+	return nil, nil
+}
+
+func createOAuthUser(provider oauth.Provider, oauthUser *oauth.OAuthUser, inviterId int, inviteCode string) (*model.User, error) {
+	inviteCode = strings.TrimSpace(inviteCode)
+	if common.InviteCodeRegisterEnabled && inviteCode == "" {
+		return nil, errors.New("请输入邀请码")
 	}
 
+	user := &model.User{}
 	// Set up new user
 	user.Username = provider.GetProviderPrefix() + strconv.Itoa(model.GetMaxUserId()+1)
 
@@ -271,13 +417,6 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	user.Role = common.RoleCommonUser
 	user.Status = common.UserStatusEnabled
 
-	// Handle affiliate code
-	affCode := session.Get("aff")
-	inviterId := 0
-	if affCode != nil {
-		inviterId, _ = model.GetUserIdByAffCode(affCode.(string))
-	}
-
 	// Use transaction to ensure user creation and OAuth binding are atomic
 	if genericProvider, ok := provider.(*oauth.GenericOAuthProvider); ok {
 		// Custom provider: create user and binding in a transaction
@@ -286,7 +425,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 			if err := user.InsertWithTx(tx, inviterId); err != nil {
 				return err
 			}
-			if err := consumeInviteCodeForRegistration(tx, session, user.Id); err != nil {
+			if err := consumeInviteCodeForRegistration(tx, inviteCode, user.Id); err != nil {
 				return err
 			}
 
@@ -315,7 +454,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 			if err := user.InsertWithTx(tx, inviterId); err != nil {
 				return err
 			}
-			if err := consumeInviteCodeForRegistration(tx, session, user.Id); err != nil {
+			if err := consumeInviteCodeForRegistration(tx, inviteCode, user.Id); err != nil {
 				return err
 			}
 
@@ -345,19 +484,70 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	return user, nil
 }
 
-func consumeInviteCodeForRegistration(tx *gorm.DB, session sessions.Session, userId int) error {
+func consumeInviteCodeForRegistration(tx *gorm.DB, inviteCode string, userId int) error {
 	if !common.InviteCodeRegisterEnabled {
 		return nil
 	}
-	rawInviteCode := session.Get("invite_code")
-	if rawInviteCode == nil {
-		return errors.New("邀请码不能为空")
-	}
-	inviteCode, ok := rawInviteCode.(string)
-	if !ok || inviteCode == "" {
-		return errors.New("邀请码不能为空")
+	inviteCode = strings.TrimSpace(inviteCode)
+	if inviteCode == "" {
+		return errors.New("请输入邀请码")
 	}
 	return model.ConsumeInviteCodeTx(tx, inviteCode, userId)
+}
+
+func getInviteCodeFromSession(session sessions.Session) string {
+	rawInviteCode := session.Get("invite_code")
+	inviteCode, ok := rawInviteCode.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(inviteCode)
+}
+
+func getInviterIdFromSession(session sessions.Session) int {
+	rawAffCode := session.Get("aff")
+	affCode, ok := rawAffCode.(string)
+	if !ok || affCode == "" {
+		return 0
+	}
+	inviterId, _ := model.GetUserIdByAffCode(affCode)
+	return inviterId
+}
+
+func savePendingOAuthRegistration(session sessions.Session, providerName string, oauthUser *oauth.OAuthUser) error {
+	payload, err := common.Marshal(newPendingOAuthRegistration(providerName, oauthUser))
+	if err != nil {
+		return err
+	}
+	session.Set(pendingOAuthRegistrationSessionKey, string(payload))
+	session.Delete("invite_code")
+	return session.Save()
+}
+
+func loadPendingOAuthRegistration(session sessions.Session) (*pendingOAuthRegistration, error) {
+	rawPending := session.Get(pendingOAuthRegistrationSessionKey)
+	if rawPending == nil {
+		return nil, nil
+	}
+	pendingStr, ok := rawPending.(string)
+	if !ok || pendingStr == "" {
+		return nil, errors.New("待完成的第三方注册信息已损坏，请重新发起登录")
+	}
+	pending := &pendingOAuthRegistration{}
+	if err := common.UnmarshalJsonStr(pendingStr, pending); err != nil {
+		return nil, errors.New("待完成的第三方注册信息已损坏，请重新发起登录")
+	}
+	if pending.Provider == "" || pending.ProviderUserID == "" {
+		return nil, errors.New("待完成的第三方注册信息不完整，请重新发起登录")
+	}
+	return pending, nil
+}
+
+func clearOAuthRegistrationSession(session sessions.Session) {
+	session.Delete("oauth_state")
+	session.Delete("invite_code")
+	session.Delete("aff")
+	session.Delete(pendingOAuthRegistrationSessionKey)
 }
 
 // Error types for OAuth
@@ -371,6 +561,14 @@ type OAuthRegistrationDisabledError struct{}
 
 func (e *OAuthRegistrationDisabledError) Error() string {
 	return "registration is disabled"
+}
+
+type OAuthInviteCodeRequiredError struct {
+	Provider string
+}
+
+func (e *OAuthInviteCodeRequiredError) Error() string {
+	return "invite code is required"
 }
 
 // handleOAuthError handles OAuth errors and returns translated message
