@@ -332,9 +332,6 @@ const RegisterForm = () => {
     if (githubButtonDisabled) {
       return;
     }
-    if (!ensureInviteCodeReady()) {
-      return;
-    }
     setGithubLoading(true);
     setGithubButtonDisabled(true);
     setGithubButtonState('redirecting');
@@ -354,9 +351,6 @@ const RegisterForm = () => {
   };
 
   const handleDiscordClick = () => {
-    if (!ensureInviteCodeReady()) {
-      return;
-    }
     setDiscordLoading(true);
     try {
       onDiscordOAuthClicked(status.discord_client_id, { shouldLogout: true });
@@ -366,9 +360,6 @@ const RegisterForm = () => {
   };
 
   const handleOIDCClick = () => {
-    if (!ensureInviteCodeReady()) {
-      return;
-    }
     setOidcLoading(true);
     try {
       onOIDCClicked(
@@ -383,9 +374,6 @@ const RegisterForm = () => {
   };
 
   const handleLinuxDOClick = () => {
-    if (!ensureInviteCodeReady()) {
-      return;
-    }
     setLinuxdoLoading(true);
     try {
       onLinuxDOOAuthClicked(status.linuxdo_client_id, { shouldLogout: true });
@@ -395,9 +383,6 @@ const RegisterForm = () => {
   };
 
   const handleCustomOAuthClick = (provider) => {
-    if (!ensureInviteCodeReady()) {
-      return;
-    }
     setCustomOAuthLoading((prev) => ({ ...prev, [provider.slug]: true }));
     try {
       onCustomOAuthClicked(provider, { shouldLogout: true });

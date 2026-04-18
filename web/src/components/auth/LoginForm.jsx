@@ -567,19 +567,31 @@ const LoginForm = () => {
             <div className='px-2 py-8'>
               <div className='space-y-3'>
                 {status?.invite_code_register_enabled && (
-                  <div className='mb-4'>
+                  <div className='mb-5 rounded-2xl border border-amber-200 bg-amber-50/90 p-4 shadow-sm'>
+                    <div className='mb-3 flex items-start gap-3'>
+                      <div className='mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700'>
+                        <IconKey />
+                      </div>
+                      <div>
+                        <Text strong className='!text-amber-900'>
+                          {t('需要邀请码，请确保你有邀请码')}
+                        </Text>
+                        <div className='mt-1'>
+                          <Text size='small' className='!text-amber-800'>
+                            {t('用于首次第三方注册，已有账号登录不受影响。')}
+                          </Text>
+                        </div>
+                      </div>
+                    </div>
                     <Form.Input
                       field='invite_code'
                       label={t('邀请码')}
-                      placeholder={t('首次第三方注册时填写邀请码，已有账号可留空')}
+                      placeholder={t('请输入邀请码')}
                       name='invite_code'
                       value={inputs.invite_code}
                       onChange={(value) => handleChange('invite_code', value)}
                       prefix={<IconKey />}
                     />
-                    <Text size='small' className='text-gray-500'>
-                      {t('首次第三方注册时填写邀请码，已有账号可留空')}
-                    </Text>
                   </div>
                 )}
 
