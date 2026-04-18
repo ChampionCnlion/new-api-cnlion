@@ -89,6 +89,7 @@ const NotificationSettings = ({
       deployment: true,
       subscription: true,
       redemption: true,
+      invite_code: true,
       user: true,
       setting: true,
     },
@@ -173,6 +174,7 @@ const NotificationSettings = ({
         deployment: true,
         subscription: true,
         redemption: true,
+        invite_code: true,
         user: true,
         setting: true,
       },
@@ -308,6 +310,11 @@ const NotificationSettings = ({
           key: 'redemption',
           title: t('兑换码管理'),
           description: t('兑换码生成管理'),
+        },
+        {
+          key: 'invite_code',
+          title: t('邀请码管理'),
+          description: t('注册邀请码管理'),
         },
         { key: 'user', title: t('用户管理'), description: t('用户账户管理') },
         {

@@ -1,0 +1,12 @@
+# Override the application image without changing the default compose file.
+#
+# Example:
+#   NEW_API_IMAGE=ghcr.io/<github-owner>/<repo>:latest \
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
+#
+#   NEW_API_IMAGE=ghcr.io/<github-owner>/<repo>:latest \
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+
+services:
+  new-api:
+    image: ${NEW_API_IMAGE:?set NEW_API_IMAGE to your GHCR image tag}

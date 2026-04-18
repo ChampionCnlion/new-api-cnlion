@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -26,6 +27,14 @@ func GenerateOAuthCode(c *gin.Context) {
 	affCode := c.Query("aff")
 	if affCode != "" {
 		session.Set("aff", affCode)
+	} else {
+		session.Delete("aff")
+	}
+	inviteCode := c.Query("invite_code")
+	if inviteCode != "" {
+		session.Set("invite_code", inviteCode)
+	} else {
+		session.Delete("invite_code")
 	}
 	session.Set("oauth_state", state)
 	err := session.Save()
@@ -277,6 +286,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 			if err := user.InsertWithTx(tx, inviterId); err != nil {
 				return err
 			}
+			if err := consumeInviteCodeForRegistration(tx, session, user.Id); err != nil {
+				return err
+			}
 
 			// Create OAuth binding
 			binding := &model.UserOAuthBinding{
@@ -295,12 +307,15 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		}
 
 		// Perform post-transaction tasks (logs, sidebar config, inviter rewards)
-		user.FinalizeOAuthUserCreation(inviterId)
+		user.FinalizeUserCreation(inviterId)
 	} else {
 		// Built-in provider: create user and update provider ID in a transaction
 		err := model.DB.Transaction(func(tx *gorm.DB) error {
 			// Create user
 			if err := user.InsertWithTx(tx, inviterId); err != nil {
+				return err
+			}
+			if err := consumeInviteCodeForRegistration(tx, session, user.Id); err != nil {
 				return err
 			}
 
@@ -324,10 +339,25 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		}
 
 		// Perform post-transaction tasks
-		user.FinalizeOAuthUserCreation(inviterId)
+		user.FinalizeUserCreation(inviterId)
 	}
 
 	return user, nil
+}
+
+func consumeInviteCodeForRegistration(tx *gorm.DB, session sessions.Session, userId int) error {
+	if !common.InviteCodeRegisterEnabled {
+		return nil
+	}
+	rawInviteCode := session.Get("invite_code")
+	if rawInviteCode == nil {
+		return errors.New("邀请码不能为空")
+	}
+	inviteCode, ok := rawInviteCode.(string)
+	if !ok || inviteCode == "" {
+		return errors.New("邀请码不能为空")
+	}
+	return model.ConsumeInviteCodeTx(tx, inviteCode, userId)
 }
 
 // Error types for OAuth

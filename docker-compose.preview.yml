@@ -1,0 +1,78 @@
+# New-API Preview Docker Compose Configuration
+#
+# Safe preview environment:
+# - Builds from local source code
+# - Uses port 3001 instead of 3000
+# - Uses separate containers, volumes, data, and network
+# - Does not reuse the default postgres/redis services from docker-compose.yml
+#
+# Start:
+#   docker compose -f docker-compose.preview.yml up -d --build
+#
+# Stop:
+#   docker compose -f docker-compose.preview.yml down
+#
+# Access:
+#   http://<your-vps-ip>:3001
+
+version: '3.4'
+
+services:
+  new-api-preview:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        LOW_MEMORY_BUILD: "true"
+    image: new-api-preview:local
+    container_name: new-api-preview
+    restart: unless-stopped
+    command: --log-dir /app/logs
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./data-preview:/data
+      - ./logs-preview:/app/logs
+    environment:
+      - SQL_DSN=postgresql://root:previewpassword@postgres-preview:5432/new-api-preview
+      - REDIS_CONN_STRING=redis://redis-preview
+      - TZ=Asia/Shanghai
+      - ERROR_LOG_ENABLED=true
+      - BATCH_UPDATE_ENABLED=true
+    depends_on:
+      - redis-preview
+      - postgres-preview
+    networks:
+      - new-api-preview-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/api/status | grep -o '\"success\":\\s*true' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis-preview:
+    image: redis:latest
+    container_name: redis-preview
+    restart: unless-stopped
+    networks:
+      - new-api-preview-network
+
+  postgres-preview:
+    image: postgres:15
+    container_name: postgres-preview
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: previewpassword
+      POSTGRES_DB: new-api-preview
+    volumes:
+      - pg_data_preview:/var/lib/postgresql/data
+    networks:
+      - new-api-preview-network
+
+volumes:
+  pg_data_preview:
+
+networks:
+  new-api-preview-network:
+    driver: bridge

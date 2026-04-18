@@ -57,11 +57,13 @@ const OAuth2Callback = (props) => {
       }
 
       if (data?.action === 'bind') {
+        localStorage.removeItem('invite_code');
         showSuccess(t('绑定成功！'));
         navigate('/console/personal');
       } else {
         userDispatch({ type: 'login', payload: data });
         localStorage.setItem('user', JSON.stringify(data));
+        localStorage.removeItem('invite_code');
         setUserData(data);
         updateAPI();
         showSuccess(t('登录成功！'));

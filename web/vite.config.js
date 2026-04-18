@@ -23,6 +23,7 @@ import pkg from '@douyinfe/vite-plugin-semi';
 import path from 'path';
 import { codeInspectorPlugin } from 'code-inspector-plugin';
 const { vitePluginSemi } = pkg;
+const lowMemoryBuild = process.env.LOW_MEMORY_BUILD === 'true';
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -32,9 +33,10 @@ export default defineConfig({
     },
   },
   plugins: [
-    codeInspectorPlugin({
-      bundler: 'vite',
-    }),
+    !lowMemoryBuild &&
+      codeInspectorPlugin({
+        bundler: 'vite',
+      }),
     {
       name: 'treat-js-files-as-jsx',
       async transform(code, id) {
@@ -54,7 +56,7 @@ export default defineConfig({
     vitePluginSemi({
       cssLayer: true,
     }),
-  ],
+  ].filter(Boolean),
   optimizeDeps: {
     force: true,
     esbuildOptions: {
@@ -65,6 +67,9 @@ export default defineConfig({
     },
   },
   build: {
+    minify: lowMemoryBuild ? false : 'esbuild',
+    cssMinify: !lowMemoryBuild,
+    reportCompressedSize: !lowMemoryBuild,
     rollupOptions: {
       output: {
         manualChunks: {

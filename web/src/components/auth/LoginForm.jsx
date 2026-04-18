@@ -116,9 +116,14 @@ const LoginForm = () => {
   const logo = getLogo();
   const systemName = getSystemName();
 
-  let affCode = new URLSearchParams(window.location.search).get('aff');
+  const urlSearchParams = new URLSearchParams(window.location.search);
+  let affCode = urlSearchParams.get('aff');
+  const inviteCode = urlSearchParams.get('invite_code');
   if (affCode) {
     localStorage.setItem('aff', affCode);
+  }
+  if (inviteCode) {
+    localStorage.setItem('invite_code', inviteCode);
   }
 
   const status = useMemo(() => {

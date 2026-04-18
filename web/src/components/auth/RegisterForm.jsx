@@ -68,6 +68,9 @@ import { SiDiscord } from 'react-icons/si';
 const RegisterForm = () => {
   let navigate = useNavigate();
   const { t } = useTranslation();
+  const searchParams = new URLSearchParams(window.location.search);
+  const affCodeFromQuery = searchParams.get('aff');
+  const inviteCodeFromQuery = searchParams.get('invite_code');
   const githubButtonTextKeyByState = {
     idle: '使用 GitHub 继续',
     redirecting: '正在跳转 GitHub...',
@@ -80,6 +83,7 @@ const RegisterForm = () => {
     email: '',
     verification_code: '',
     wechat_verification_code: '',
+    invite_code: inviteCodeFromQuery || localStorage.getItem('invite_code') || '',
   });
   const { username, password, password2 } = inputs;
   const [userState, userDispatch] = useContext(UserContext);
@@ -114,9 +118,12 @@ const RegisterForm = () => {
   const logo = getLogo();
   const systemName = getSystemName();
 
-  let affCode = new URLSearchParams(window.location.search).get('aff');
-  if (affCode) {
-    localStorage.setItem('aff', affCode);
+  let affCode = affCodeFromQuery;
+  if (affCodeFromQuery) {
+    localStorage.setItem('aff', affCodeFromQuery);
+  }
+  if (inviteCodeFromQuery) {
+    localStorage.setItem('invite_code', inviteCodeFromQuery);
   }
 
   const status = useMemo(() => {
@@ -177,25 +184,48 @@ const RegisterForm = () => {
   }, []);
 
   const onWeChatLoginClicked = () => {
+    if (!ensureInviteCodeReady()) {
+      return;
+    }
     setWechatLoading(true);
     setShowWeChatLoginModal(true);
     setWechatLoading(false);
   };
 
+  const ensureInviteCodeReady = () => {
+    if (!status?.invite_code_register_enabled) {
+      return true;
+    }
+    const inviteCode =
+      inputs.invite_code?.trim() || localStorage.getItem('invite_code') || '';
+    if (!inviteCode) {
+      showInfo('请输入邀请码');
+      return false;
+    }
+    localStorage.setItem('invite_code', inviteCode);
+    return true;
+  };
+
   const onSubmitWeChatVerificationCode = async () => {
+    if (!ensureInviteCodeReady()) {
+      return;
+    }
     if (turnstileEnabled && turnstileToken === '') {
       showInfo('请稍后几秒重试，Turnstile 正在检查用户环境！');
       return;
     }
     setWechatCodeSubmitLoading(true);
     try {
+      const inviteCode = localStorage.getItem('invite_code') || '';
+      const inviterAffCode = affCode || localStorage.getItem('aff') || '';
       const res = await API.get(
-        `/api/oauth/wechat?code=${inputs.wechat_verification_code}`,
+        `/api/oauth/wechat?code=${inputs.wechat_verification_code}&invite_code=${encodeURIComponent(inviteCode)}&aff=${encodeURIComponent(inviterAffCode)}`,
       );
       const { success, message, data } = res.data;
       if (success) {
         userDispatch({ type: 'login', payload: data });
         localStorage.setItem('user', JSON.stringify(data));
+        localStorage.removeItem('invite_code');
         setUserData(data);
         updateAPI();
         navigate('/');
@@ -212,6 +242,14 @@ const RegisterForm = () => {
   };
 
   function handleChange(name, value) {
+    if (name === 'invite_code') {
+      const nextValue = (value || '').trim();
+      if (nextValue) {
+        localStorage.setItem('invite_code', nextValue);
+      } else {
+        localStorage.removeItem('invite_code');
+      }
+    }
     setInputs((inputs) => ({ ...inputs, [name]: value }));
   }
 
@@ -225,6 +263,12 @@ const RegisterForm = () => {
       return;
     }
     if (username && password) {
+      const inviteCode =
+        inputs.invite_code?.trim() || localStorage.getItem('invite_code') || '';
+      if (status?.invite_code_register_enabled && !inviteCode) {
+        showInfo('请输入邀请码');
+        return;
+      }
       if (turnstileEnabled && turnstileToken === '') {
         showInfo('请稍后几秒重试，Turnstile 正在检查用户环境！');
         return;
@@ -234,13 +278,18 @@ const RegisterForm = () => {
         if (!affCode) {
           affCode = localStorage.getItem('aff');
         }
-        inputs.aff_code = affCode;
+        const payload = {
+          ...inputs,
+          aff_code: affCode,
+          invite_code: inviteCode,
+        };
         const res = await API.post(
           `/api/user/register?turnstile=${turnstileToken}`,
-          inputs,
+          payload,
         );
         const { success, message } = res.data;
         if (success) {
+          localStorage.removeItem('invite_code');
           navigate('/login');
           showSuccess('注册成功！');
         } else {
@@ -283,6 +332,9 @@ const RegisterForm = () => {
     if (githubButtonDisabled) {
       return;
     }
+    if (!ensureInviteCodeReady()) {
+      return;
+    }
     setGithubLoading(true);
     setGithubButtonDisabled(true);
     setGithubButtonState('redirecting');
@@ -302,6 +354,9 @@ const RegisterForm = () => {
   };
 
   const handleDiscordClick = () => {
+    if (!ensureInviteCodeReady()) {
+      return;
+    }
     setDiscordLoading(true);
     try {
       onDiscordOAuthClicked(status.discord_client_id, { shouldLogout: true });
@@ -311,6 +366,9 @@ const RegisterForm = () => {
   };
 
   const handleOIDCClick = () => {
+    if (!ensureInviteCodeReady()) {
+      return;
+    }
     setOidcLoading(true);
     try {
       onOIDCClicked(
@@ -325,6 +383,9 @@ const RegisterForm = () => {
   };
 
   const handleLinuxDOClick = () => {
+    if (!ensureInviteCodeReady()) {
+      return;
+    }
     setLinuxdoLoading(true);
     try {
       onLinuxDOOAuthClicked(status.linuxdo_client_id, { shouldLogout: true });
@@ -334,6 +395,9 @@ const RegisterForm = () => {
   };
 
   const handleCustomOAuthClick = (provider) => {
+    if (!ensureInviteCodeReady()) {
+      return;
+    }
     setCustomOAuthLoading((prev) => ({ ...prev, [provider.slug]: true }));
     try {
       onCustomOAuthClicked(provider, { shouldLogout: true });
@@ -601,6 +665,18 @@ const RegisterForm = () => {
                   onChange={(value) => handleChange('password2', value)}
                   prefix={<IconLock />}
                 />
+
+                {status?.invite_code_register_enabled && (
+                  <Form.Input
+                    field='invite_code'
+                    label={t('邀请码')}
+                    placeholder={t('请输入邀请码')}
+                    name='invite_code'
+                    value={inputs.invite_code}
+                    onChange={(value) => handleChange('invite_code', value)}
+                    prefix={<IconKey />}
+                  />
+                )}
 
                 {showEmailVerification && (
                   <>
